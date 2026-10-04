@@ -74,7 +74,9 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <dlfcn.h>
 #include <errno.h>
 #include <signal.h>
+#ifndef __EMSCRIPTEN__
 #include <sys/resource.h>
+#endif
 #include <sys/time.h>
 #endif
 
@@ -158,7 +160,7 @@ typedef struct {
 static thread_status_t thread_status[MAX_CPU_NUMBER] __attribute__((aligned(ATTRIBUTE_SIZE)));
 
 #ifndef THREAD_TIMEOUT
-#define THREAD_TIMEOUT	28
+#define THREAD_TIMEOUT	31   /* ≈1.5s：活跃期保有池、空闲后解散（见 OCTAVE-WASM-IDLE-EXIT） */
 #endif
 
 static unsigned int thread_timeout = (1U << (THREAD_TIMEOUT));
@@ -425,6 +427,15 @@ blas_queue_t *tscq;
 
 
 	  if (!atomic_load_queue(&thread_status[cpu].queue)) {
+	    /* OCTAVE-WASM-IDLE-EXIT */
+	    /* 空闲超时 ⇒ **退出这个 worker**（而不是永久 park）：
+	       返回 JS 事件循环后，Emscripten 的 dlsync 才能拿到应答（见本脚本文件头）。 */
+	    atomic_store_queue(&thread_status[cpu].queue, (blas_queue_t *)-1);
+	    /* 让下一次 exec_blas 重建池（OpenBLAS 自带懒重建）。 */
+	    blas_server_avail = 0;
+	    continue;
+	  }
+	  if (0) {
 	    pthread_mutex_lock  (&thread_status[cpu].lock);
 	    thread_status[cpu].status = THREAD_STATUS_SLEEP;
 	    while (thread_status[cpu].status == THREAD_STATUS_SLEEP && 
@@ -592,11 +603,12 @@ int blas_thread_init(void){
 		     &blas_thread_server, (void *)i);
 #endif
       if(ret!=0){
-	struct rlimit rlim;
         const char *msg = strerror(ret);
         fprintf(STDERR, "OpenBLAS blas_thread_init: pthread_create failed for thread %ld of %d: %s\n", i+1,blas_num_threads,msg);
-	fprintf(STDERR, "OpenBLAS blas_thread_init: ensure that your address space and process count limits are big enough (ulimit -a)\n");
-	fprintf(STDERR, "OpenBLAS blas_thread_init: or set a smaller OPENBLAS_NUM_THREADS to fit into what you have available\n");
+        fprintf(STDERR, "OpenBLAS blas_thread_init: ensure that your address space and process count limits are big enough (ulimit -a)\n");
+        fprintf(STDERR, "OpenBLAS blas_thread_init: or set a smaller OPENBLAS_NUM_THREADS to fit into what you have available\n");
+#ifndef __EMSCRIPTEN__
+        struct rlimit rlim;
 #ifdef RLIMIT_NPROC
         if(0 == getrlimit(RLIMIT_NPROC, &rlim)) {
           fprintf(STDERR, "OpenBLAS blas_thread_init: RLIMIT_NPROC "
@@ -607,6 +619,13 @@ int blas_thread_init(void){
           fprintf(STDERR, "OpenBLAS blas_thread_init: calling exit(3)\n");
           exit(EXIT_FAILURE);
         }
+#else
+        /* ★ __EMSCRIPTEN__ 补丁（2026-09-26，线程版 BLAS 缩放探针）：Emscripten libc 没有
+           `struct rlimit` / `getrlimit` / `raise` / `SIGINT`（实测三条编译错），而且 wasm 里
+           没有"进程内信号"这套语义 ⇒ 这段**仅供人读的诊断**在 wasm 上无意义。
+           失败路径直接 exit(EXIT_FAILURE)，与上面 raise 失败时的分支一致。 */
+        exit(EXIT_FAILURE);
+#endif
       }
     }
 

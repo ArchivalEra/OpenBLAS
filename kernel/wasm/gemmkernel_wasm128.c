@@ -139,14 +139,10 @@ int CNAME(BLASLONG bm, BLASLONG bn, BLASLONG bk, FLOAT alpha, IFLOAT *ba,
                                         v128_t vcol1 =
                                             wasm_i64x2_shuffle(vb01, vb23, 1, 3);
 
-                                        vacc00 = wasm_f64x2_add(
-                                            vacc00, wasm_f64x2_mul(vrow0, vcol0));
-                                        vacc10 = wasm_f64x2_add(
-                                            vacc10, wasm_f64x2_mul(vrow1, vcol0));
-                                        vacc01 = wasm_f64x2_add(
-                                            vacc01, wasm_f64x2_mul(vrow0, vcol1));
-                                        vacc11 = wasm_f64x2_add(
-                                            vacc11, wasm_f64x2_mul(vrow1, vcol1));
+                                        vacc00 = wasm_f64x2_relaxed_madd(vrow0, vcol0, vacc00);
+                                        vacc10 = wasm_f64x2_relaxed_madd(vrow1, vcol0, vacc10);
+                                        vacc01 = wasm_f64x2_relaxed_madd(vrow0, vcol1, vacc01);
+                                        vacc11 = wasm_f64x2_relaxed_madd(vrow1, vcol1, vacc11);
 
                                         ptrba += 4;
                                         ptrbb += 4;
